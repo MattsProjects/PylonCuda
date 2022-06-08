@@ -57,8 +57,13 @@ public:
 			// If you already have a buffer allocated by your image processing library, you can use this instead.
 			// In this case, you must modify the delete code (see below) accordingly
 
-			// Use Cuda unified memory: https://developer.nvidia.com/blog/unified-memory-cuda-beginners/
-			cudaMallocManaged((void**)pCreatedBuffer, sizeof(uint8_t) * bufferSize);
+			// You can use "Pinned Memory" on the host.
+			// https://developer.nvidia.com/blog/how-optimize-data-transfers-cuda-cc/
+			cudaMallocHost((void**)pCreatedBuffer, sizeof(uint8_t) * bufferSize);
+
+			// Or if your system supports "Unified Memory" on the GPU, cudaMallocManaged() can be used instead
+			// https://developer.nvidia.com/blog/unified-memory-cuda-beginners/
+			//cudaMallocManaged((void**)pCreatedBuffer, sizeof(uint8_t) * bufferSize);
 
 			bufferContext = ++m_lastBufferContext;
 			cout << "Created buffer " << bufferContext << ", " << pCreatedBuffer << ", Size: " << bufferSize << endl;
@@ -68,7 +73,10 @@ public:
 			// In case of an error you must free the memory you may have already allocated.
 			if (*pCreatedBuffer != NULL)
 			{
-				cudaFree(pCreatedBuffer);
+				cudaFreeHost(pCreatedBuffer);
+
+				// For unified memory, use cudaFree() instead
+				//cudaFree(pCreatedBuffer);
 
 				*pCreatedBuffer = NULL;
 			}
@@ -84,7 +92,10 @@ public:
 	// Warning: This method can be called by different threads.
 	virtual void FreeBuffer(void* pCreatedBuffer, intptr_t bufferContext)
 	{
-		cudaFree(pCreatedBuffer);
+		cudaFreeHost(pCreatedBuffer);
+
+		// For unified memory, use cudaFree() instead
+		//cudaFree(pCreatedBuffer);
 
 		cout << "Freed buffer " << bufferContext << ", " << pCreatedBuffer << endl;
 	}
