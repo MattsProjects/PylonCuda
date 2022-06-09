@@ -1,4 +1,3 @@
-﻿// Grab_UsingBufferFactory.cpp
 /*
 	Note: Before getting started, Basler recommends reading the "Programmer's Guide" topic
 	in the pylon C++ API documentation delivered with pylon.
@@ -10,9 +9,7 @@
 	A buffer factory is only necessary if you want to grab into externally supplied buffers.
 */
 
-// Includ files for CUDA
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
+#include "cuda_kernels.h"
 
 // Include files to use the pylon API.
 #include <pylon/PylonIncludes.h>
@@ -27,7 +24,7 @@ using namespace Pylon;
 using namespace std;
 
 // Number of images to be grabbed.
-static const uint32_t c_countOfImagesToGrab = 100;
+static const uint32_t c_countOfImagesToGrab = 10;
 
 // Maximum number of buffers to allocate for grabbing
 static const uint32_t c_maxNumBuffers = 5;
@@ -53,17 +50,12 @@ public:
 	{
 		try
 		{
-			// Allocate buffer for pixel data.
-			// If you already have a buffer allocated by your image processing library, you can use this instead.
-			// In this case, you must modify the delete code (see below) accordingly
-
 			// You can use "Pinned Memory" on the host.
 			// https://developer.nvidia.com/blog/how-optimize-data-transfers-cuda-cc/
-			cudaMallocHost((void**)pCreatedBuffer, sizeof(uint8_t) * bufferSize);
-
 			// Or if your system supports "Unified Memory" on the GPU, cudaMallocManaged() can be used instead
 			// https://developer.nvidia.com/blog/unified-memory-cuda-beginners/
-			//cudaMallocManaged((void**)pCreatedBuffer, sizeof(uint8_t) * bufferSize);
+			// This wrapper function will check and pick the best one available
+			CudaAllocateBuffer(pCreatedBuffer, bufferSize);
 
 			bufferContext = ++m_lastBufferContext;
 			cout << "Created buffer " << bufferContext << ", " << pCreatedBuffer << ", Size: " << bufferSize << endl;
@@ -73,10 +65,8 @@ public:
 			// In case of an error you must free the memory you may have already allocated.
 			if (*pCreatedBuffer != NULL)
 			{
-				cudaFreeHost(pCreatedBuffer);
-
-				// For unified memory, use cudaFree() instead
-				//cudaFree(pCreatedBuffer);
+				// Free memory wrapper function
+				CudaFreeBuffer(pCreatedBuffer);
 
 				*pCreatedBuffer = NULL;
 			}
@@ -92,10 +82,8 @@ public:
 	// Warning: This method can be called by different threads.
 	virtual void FreeBuffer(void* pCreatedBuffer, intptr_t bufferContext)
 	{
-		cudaFreeHost(pCreatedBuffer);
-
-		// For unified memory, use cudaFree() instead
-		//cudaFree(pCreatedBuffer);
+		// Free memory wrapper function
+		CudaFreeBuffer(pCreatedBuffer);
 
 		cout << "Freed buffer " << bufferContext << ", " << pCreatedBuffer << endl;
 	}
@@ -115,28 +103,7 @@ protected:
 	unsigned long m_lastBufferContext;
 };
 
-// example functions to rotate image
-__device__ uint8_t readPixVal(uint8_t* ImgSrc, int ImgWidth, int x, int y)
-{
-	return (uint8_t)ImgSrc[y * ImgWidth + x];
-}
-__device__ void putPixVal(uint8_t* ImgSrc, int ImgWidth, int x, int y, float floatVal)
-{
-	ImgSrc[y * ImgWidth + x] = floatVal;
-}
-__global__ void Rotate(uint8_t* Source, uint8_t* Destination, int sizeX, int sizeY, float deg)
-{
-	int i = blockIdx.x * blockDim.x + threadIdx.x;// Kernel definition
-	int j = blockIdx.y * blockDim.y + threadIdx.y;
-	int xc = sizeX - sizeX / 2;
-	int yc = sizeY - sizeY / 2;
-	int newx = ((float)i - xc) * cos(deg) - ((float)j - yc) * sin(deg) + xc;
-	int newy = ((float)i - xc) * sin(deg) + ((float)j - yc) * cos(deg) + yc;
-	if (newx >= 0 && newx < sizeX && newy >= 0 && newy < sizeY)
-	{
-		putPixVal(Destination, sizeX, i, j, readPixVal(Source, sizeX, newx, newy));
-	}
-}
+
 
 int main(int /*argc*/, char* /*argv*/[])
 {
@@ -146,21 +113,16 @@ int main(int /*argc*/, char* /*argv*/[])
 	// Before using any pylon methods, the pylon runtime must be initialized.
 	PylonInitialize();
 
+	// Choose the first (best) GPU available.
+	if (CudaInitialize(0) == 1)
+		return 1;
+
 	try
 	{
-		// Choose which GPU to run on, change this on a multi-GPU system.
-		cudaError_t cudaStatus = cudaSetDevice(0);
-		if (cudaStatus != cudaSuccess)
-		{
-			cout << "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?" << endl;
-			return 1;
-		}
-
 		// The buffer factory must be created first because objects on the
 		// stack are destroyed in reverse order of creation.
 		// The buffer factory must exist longer than the Instant Camera object
 		// in this sample.
-		std::cout << "Creating Buffer Factory" << std::endl;
 		MyBufferFactory myFactory;
 
 		// Create an instant camera object with the camera device found first.
@@ -171,8 +133,13 @@ int main(int /*argc*/, char* /*argv*/[])
 
 		camera.Open();
 
-		GenApi::CIntegerPtr(camera.GetNodeMap().GetNode("Width"))->SetValue(960);
-		GenApi::CIntegerPtr(camera.GetNodeMap().GetNode("Height"))->SetValue(960);
+		// setup the camera
+		GenApi::CEnumerationPtr(camera.GetNodeMap().GetNode("PixelFormat"))->FromString("Mono8");
+		GenApi::CEnumerationPtr(camera.GetNodeMap().GetNode("TriggerSelector"))->FromString("FrameStart");
+		GenApi::CEnumerationPtr(camera.GetNodeMap().GetNode("TriggerSource"))->FromString("Software");
+		GenApi::CEnumerationPtr(camera.GetNodeMap().GetNode("TriggerMode"))->FromString("On");
+		GenApi::CIntegerPtr(camera.GetNodeMap().GetNode("Width"))->SetValue(GenApi::CIntegerPtr(camera.GetNodeMap().GetNode("Width"))->GetMax());
+		GenApi::CIntegerPtr(camera.GetNodeMap().GetNode("Height"))->SetValue(GenApi::CIntegerPtr(camera.GetNodeMap().GetNode("Height"))->GetMax());
 
 		// Use our own implementation of a buffer factory.
 		// Since we control the lifetime of the factory object, we pass Cleanup_None.
@@ -185,14 +152,17 @@ int main(int /*argc*/, char* /*argv*/[])
 		// Start the grabbing of c_countOfImagesToGrab images.
 		// The camera device is parameterized with a default configuration which
 		// sets up free-running continuous acquisition.
-		camera.StartGrabbing(c_countOfImagesToGrab);
+		camera.StartGrabbing();
 
-		// Camera.StopGrabbing() is called automatically by the RetrieveResult() method
-		// when c_countOfImagesToGrab images have been retrieved.
-		while (camera.IsGrabbing())
+		int imagesGrabbed = 0;
+
+		while (imagesGrabbed < c_countOfImagesToGrab)
 		{
 			// This smart pointer will receive the grab result data.
 			CGrabResultPtr ptrGrabResult;
+
+			// trigger the camera
+			camera.ExecuteSoftwareTrigger();
 
 			// Wait for an image and then retrieve it. A timeout of 5000 ms is used.
 			camera.RetrieveResult(5000, ptrGrabResult, TimeoutHandling_ThrowException);
@@ -206,28 +176,44 @@ int main(int /*argc*/, char* /*argv*/[])
 				{
 					cout << endl;
 					// Access the image data.
-					cout << "Context: " << ptrGrabResult->GetBufferContext() << endl;
-					cout << "SizeX: " << ptrGrabResult->GetWidth() << endl;
-					cout << "SizeY: " << ptrGrabResult->GetHeight() << endl;
-					const uint8_t* pImageBuffer = (uint8_t*)ptrGrabResult->GetBuffer();
-					cout << "First value of pixel data: " << (uint32_t)pImageBuffer[0] << endl;
+					int width = ptrGrabResult->GetWidth();
+					int height = ptrGrabResult->GetHeight();
+					cout << "Image   : " << imagesGrabbed << endl;
+					cout << "Context : " << ptrGrabResult->GetBufferContext() << endl;
+					cout << "SizeX   : " << width << endl;
+					cout << "SizeY   : " << height << endl;
 
-					uint8_t* pSrcBuf = (uint8_t*)ptrGrabResult->GetBuffer();
-					uint8_t* pOutBuf = NULL;
-					cudaMallocManaged((void**)pOutBuf, sizeof(uint8_t) * ptrGrabResult->GetPayloadSize());
+					cout << "Saving Grabbed Image..." << endl;
+					std::string fileName = "image_";
+					fileName.append(std::to_string(imagesGrabbed));
+					fileName.append(".png");
+					CImagePersistence::Save(Pylon::ImageFileFormat_Png, fileName.c_str(), ptrGrabResult);
 
-					Rotate<<<1, 1>>>(pSrcBuf, pOutBuf, ptrGrabResult->GetWidth(), ptrGrabResult->GetHeight(), 90);
+					cout << "Blurring image..." << endl;
+					uint8_t* pImage = (uint8_t*)ptrGrabResult->GetBuffer();
+					CPylonImage blurredImage;
+					uint8_t* pBlurred = new uint8_t[width * height];
 
-					CPylonImage rotatedImage;
-					rotatedImage.AttachUserBuffer(pOutBuf, ptrGrabResult->GetPayloadSize(), ptrGrabResult->GetPixelType(), ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), ptrGrabResult->GetPaddingX());
+					// Use the GPU To blur the image :-)
+					CudaBlurMono8(pImage, pBlurred, width, height);
 
+					blurredImage.AttachUserBuffer(pBlurred, width * height, ptrGrabResult->GetPixelType(), width, height, ptrGrabResult->GetPaddingX());
+
+					cout << "Saving Blurred Image..." << endl;
+					fileName = "image_";
+					fileName.append(std::to_string(imagesGrabbed));
+					fileName.append("_blurred");
+					fileName.append(".png");
+					CImagePersistence::Save(Pylon::ImageFileFormat_Png, fileName.c_str(), blurredImage);
 
 #ifdef PYLON_WIN_BUILD
 					// Display the grabbed image.
 					Pylon::DisplayImage(1, ptrGrabResult);
-					Pylon::DisplayImage(2, rotatedImage);
+					Pylon::DisplayImage(2, blurredImage);
 #endif
-					cudaFree(pOutBuf);
+					delete[] pBlurred;
+
+					imagesGrabbed++;
 				}
 				else
 				{
@@ -235,6 +221,7 @@ int main(int /*argc*/, char* /*argv*/[])
 				}
 			}
 		}
+		camera.StopGrabbing();
 	}
 	catch (const GenericException& e)
 	{
