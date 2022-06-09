@@ -168,57 +168,52 @@ int main(int /*argc*/, char* /*argv*/[])
 			camera.RetrieveResult(5000, ptrGrabResult, TimeoutHandling_ThrowException);
 
 			// Image grabbed successfully?
-			if (ptrGrabResult == NULL)
-				cout << "Grab Result Pointer is NULL!" << endl;
-			else
+			if (ptrGrabResult->GrabSucceeded())
 			{
-				if (ptrGrabResult->GrabSucceeded())
-				{
-					cout << endl;
-					// Access the image data.
-					int width = ptrGrabResult->GetWidth();
-					int height = ptrGrabResult->GetHeight();
-					cout << "Image   : " << imagesGrabbed << endl;
-					cout << "Context : " << ptrGrabResult->GetBufferContext() << endl;
-					cout << "SizeX   : " << width << endl;
-					cout << "SizeY   : " << height << endl;
+				cout << endl;
+				// Access the image data.
+				int width = ptrGrabResult->GetWidth();
+				int height = ptrGrabResult->GetHeight();
+				cout << "Image   : " << imagesGrabbed << endl;
+				cout << "Context : " << ptrGrabResult->GetBufferContext() << endl;
+				cout << "SizeX   : " << width << endl;
+				cout << "SizeY   : " << height << endl;
 
-					cout << "Saving Grabbed Image..." << endl;
-					std::string fileName = "image_";
-					fileName.append(std::to_string(imagesGrabbed));
-					fileName.append(".png");
-					CImagePersistence::Save(Pylon::ImageFileFormat_Png, fileName.c_str(), ptrGrabResult);
+				cout << "Saving Grabbed Image..." << endl;
+				std::string fileName = "image_";
+				fileName.append(std::to_string(imagesGrabbed));
+				fileName.append(".png");
+				CImagePersistence::Save(Pylon::ImageFileFormat_Png, fileName.c_str(), ptrGrabResult);
 
-					cout << "Blurring image..." << endl;
-					uint8_t* pImage = (uint8_t*)ptrGrabResult->GetBuffer();
-					CPylonImage blurredImage;
-					uint8_t* pBlurred = new uint8_t[width * height];
+				cout << "Blurring image..." << endl;
+				uint8_t* pImage = (uint8_t*)ptrGrabResult->GetBuffer();
+				CPylonImage blurredImage;
+				uint8_t* pBlurred = new uint8_t[width * height];
 
-					// Use the GPU To blur the image :-)
-					CudaBlurMono8(pImage, pBlurred, width, height);
+				// Use the GPU To blur the image :-)
+				CudaBlurMono8(pImage, pBlurred, width, height);
 
-					blurredImage.AttachUserBuffer(pBlurred, width * height, ptrGrabResult->GetPixelType(), width, height, ptrGrabResult->GetPaddingX());
+				blurredImage.AttachUserBuffer(pBlurred, width * height, ptrGrabResult->GetPixelType(), width, height, ptrGrabResult->GetPaddingX());
 
-					cout << "Saving Blurred Image..." << endl;
-					fileName = "image_";
-					fileName.append(std::to_string(imagesGrabbed));
-					fileName.append("_blurred");
-					fileName.append(".png");
-					CImagePersistence::Save(Pylon::ImageFileFormat_Png, fileName.c_str(), blurredImage);
+				cout << "Saving Blurred Image..." << endl;
+				fileName = "image_";
+				fileName.append(std::to_string(imagesGrabbed));
+				fileName.append("_blurred");
+				fileName.append(".png");
+				CImagePersistence::Save(Pylon::ImageFileFormat_Png, fileName.c_str(), blurredImage);
 
 #ifdef PYLON_WIN_BUILD
-					// Display the grabbed image.
-					Pylon::DisplayImage(1, ptrGrabResult);
-					Pylon::DisplayImage(2, blurredImage);
+				// Display the grabbed image.
+				Pylon::DisplayImage(1, ptrGrabResult);
+				Pylon::DisplayImage(2, blurredImage);
 #endif
-					delete[] pBlurred;
+				delete[] pBlurred;
 
-					imagesGrabbed++;
-				}
-				else
-				{
-					cout << "Error: " << std::hex << ptrGrabResult->GetErrorCode() << std::dec << " " << ptrGrabResult->GetErrorDescription();
-				}
+				imagesGrabbed++;
+			}
+			else
+			{
+				cout << "Error: " << std::hex << ptrGrabResult->GetErrorCode() << std::dec << " " << ptrGrabResult->GetErrorDescription();
 			}
 		}
 		camera.StopGrabbing();
